@@ -1,0 +1,107 @@
+##--------------------------------------------------------------------
+## Install Prometheus
+yum update -y
+apt install golang-go -y
+wget https://github.com/prometheus/prometheus/releases/download/v2.35.0/prometheus-2.35.0.linux-amd64.tar.gz -P /tmp
+
+cd /tmp
+
+useradd prometheus --no-create-home
+tar xvfz prometheus-*.tar.gz
+rm prometheus-*.tar.gz
+
+mkdir -p /etc/prometheus
+mkdir -p /var/lib/prometheus/
+chown -R prometheus:prometheus /etc/prometheus
+chown -R prometheus:prometheus /var/lib/prometheus
+
+mv prometheus*/* /etc/prometheus/
+
+mv /etc/prometheus/prometheus /usr/local/bin/
+
+cat > "/etc/prometheus/prometheus.yml" <<EOF
+# my global config
+global:
+  scrape_interval:     15s # Set the scrape interval to every 15 seconds. Default is every 1 minute.
+  evaluation_interval: 15s # Evaluate rules every 15 seconds. The default is every 1 minute.
+  # scrape_timeout is set to the global default (10s).
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      # - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+remote_write:
+  -
+    url: https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-7bde223f-7b26-4b87-98ce-e2408caddba1/api/v1/remote_write
+    queue_config:
+        max_samples_per_send: 1000
+        max_shards: 200
+        capacity: 2500
+    sigv4:
+        region: ap-southeast-1
+# A scrape configuration containing exactly one endpoint to scrape:
+# Here its Prometheus itself.
+scrape_configs:
+  # The job name is added as a label \`job=<job_name>\` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+
+    static_configs:
+    - targets: ['localhost:9090']
+
+  - job_name: 'vault'
+    ec2_sd_configs:
+    - region: ap-southeast-1
+      filters:
+        - name: tag:moayad-test-vault
+          values: server
+    scheme: "https"
+    tls_config:
+     insecure_skip_verify: true
+    metrics_path: "/v1/sys/metrics"
+    params:
+      format: ['prometheus']
+
+  # - job_name: node
+  #   static_configs:
+  #   - targets: [vault_2:9100, vault_3:9100, vault_4:9100]
+
+EOF
+
+cat > "/etc/systemd/system/prometheus.service" <<EOF
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries
+
+[Install]
+WantedBy=multi-user.target
+
+EOF
+
+
+systemctl daemon-reload
+systemctl enable prometheus
+systemctl stop prometheus
+systemctl start prometheus
+systemctl status --no-pager prometheus
+
